@@ -53,6 +53,23 @@ Dotlist overrides are passed after `--`:
 python -m trainrunner.run --config config.yaml -- optim.lr=1e-3 data.batch_size=64
 ```
 
+## Freeze (optional)
+
+You can freeze part of the model by passing a `freeze` config under `runner` (so it won't be forwarded into your task constructor). Targets are treated as glob patterns and are resolved in this order:
+
+1. If the task defines `get_freeze_targets() -> dict[str, nn.Module]`, patterns match those keys.
+2. Otherwise, patterns match `named_modules()` paths (e.g. `backbone`, `model.layer1`).
+
+Example:
+
+```yaml
+runner:
+  freeze:
+    targets: ["backbone"]
+    bn_eval: true   # keep BatchNorm in frozen targets in eval() during training
+    strict: true    # error if a pattern matches nothing
+```
+
 ## Task Interface
 
 Provide `task.entry=some.module:TaskClassOrFactory`. The resolved object must satisfy:

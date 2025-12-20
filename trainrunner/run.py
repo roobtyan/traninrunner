@@ -13,6 +13,7 @@ from tqdm import tqdm
 from .checkpoint import default_checkpoint_paths, load_checkpoint, save_checkpoint
 from .config import RunnerConfig, parse_config
 from .dist import DistInfo, all_reduce_sum, barrier, broadcast_object, cleanup_distributed, setup_distributed
+from .freeze import parse_freeze_config, setup_freeze
 from .metrics import LogEvent, MetricsLogger
 from .plugins import (
     Plugin,
@@ -22,6 +23,16 @@ from .plugins import (
     plugin_state_dict,
 )
 from .utils import detach_loss, detach_metrics, ensure_dir, generate_run_id, json_dumps, now_s, pretty_seconds, seed_everything
+
+
+def _looks_like_freeze_cfg(obj: Any) -> bool:
+    if obj is None:
+        return False
+    if isinstance(obj, (str, list, tuple)):
+        return True
+    if isinstance(obj, dict):
+        return any(k in obj for k in ("targets", "bn_eval", "strict", "freeze"))
+    return False
 
 
 def _import_from_path(path: str):
@@ -119,9 +130,29 @@ def _main(runner: RunnerConfig, task_kwargs: Dict[str, Any], resolved: Dict[str,
 
     plugins = load_plugins(runner.plugins)
 
+    freeze_raw = getattr(runner, "freeze", None)
+    if freeze_raw is None and _looks_like_freeze_cfg(task_kwargs.get("freeze")):
+        freeze_raw = task_kwargs.pop("freeze")
+    freeze_cfg = parse_freeze_config(freeze_raw)
+
     task = _create_task(runner.task_entry, task_kwargs)
     for p in plugins:
         task = p.wrap_model(task, cfg={"runner": asdict(runner), "task": task_kwargs})
+
+    freeze_state = setup_freeze(task, freeze_cfg, task_kwargs)
+    if freeze_cfg is not None and freeze_state is not None:
+        any_trainable = any(p.requires_grad for p in task.parameters())
+        if not any_trainable:
+            raise ValueError("freeze config froze all parameters; at least one parameter must remain trainable")
+    if freeze_state is not None and dist.is_main_process:
+        frozen_param_ids: set[int] = set()
+        for m in freeze_state.modules:
+            for param in m.parameters(recurse=True):
+                frozen_param_ids.add(id(param))
+        print(
+            f"[freeze] matched={freeze_state.matched} bn_eval={freeze_state.bn_eval} frozen_params={len(frozen_param_ids)}",
+            flush=True,
+        )
 
     task.to(dist.device)
 
@@ -187,6 +218,8 @@ def _main(runner: RunnerConfig, task_kwargs: Dict[str, Any], resolved: Dict[str,
     for epoch in range(start_epoch, runner.epochs):
         _maybe_set_sampler_epoch(train_sampler, epoch)
         model_obj.train()
+        if freeze_state is not None:
+            freeze_state.enforce_train_mode()
 
         train_sum_loss = 0.0
         train_count = 0

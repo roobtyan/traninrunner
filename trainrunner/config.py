@@ -29,6 +29,7 @@ class RunnerConfig:
     max_total_train_iters: Optional[int] = None
     best_metric: str = "valid/loss"
     best_mode: str = "min"  # "min" | "max"
+    freeze: Optional[Dict[str, Any]] = None
 
 
 def _load_config_file(path: str) -> Dict[str, Any]:
