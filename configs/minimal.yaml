@@ -1,0 +1,12 @@
+runner:
+  work_dir: ./runs
+  epochs: 3
+  valid_every_n_epoch: 1
+  log_every_n_iter: 20
+  seed: 1337
+
+task:
+  entry: examples.minimal_task:MinimalTask
+  kwargs:
+    batch_size: 64
+    lr: 0.001

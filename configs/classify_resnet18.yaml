@@ -1,0 +1,26 @@
+runner:
+  work_dir: ./runs
+  epochs: 5
+  valid_every_n_epoch: 1
+  log_every_n_iter: 50
+  seed: 1337
+  best_metric: valid/acc1
+  best_mode: max
+
+task:
+  entry: train.cifar-10.classify_cifar10:ClassifyCIFAR10Task
+  kwargs:
+    data:
+    model:
+    train:
+      batch_size: 32
+      num_workers: 4
+    optim:
+      name: sgd
+      lr: 0.1
+      momentum: 0.9
+      nesterov: true
+      weight_decay: 0.0001
+    loss:
+      label_smoothing: 0.0
+
