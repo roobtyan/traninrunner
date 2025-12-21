@@ -86,7 +86,7 @@ See `examples/minimal_task.py`.
 
 This repo also includes an ImageFolder-style image classification task under `train/classify/`.
 
-Example config: `configs/classify_resnet50.yaml`
+Example config: `configs/classify_resnet18.yaml`
 
 Install deps (optional extras):
 
