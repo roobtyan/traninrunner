@@ -5,12 +5,10 @@ import torch.distributed as dist
 
 from PIL import Image
 from torch.utils.data import Dataset
-from dataclasses import dataclass
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 
-@dataclass
 class CIFAR100Python(Dataset):
     def __init__(self, root, train=True, transform=None):
         self.transform = transform

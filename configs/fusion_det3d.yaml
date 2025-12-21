@@ -1,0 +1,41 @@
+runner:
+  work_dir: ./runs
+  epochs: 5
+  valid_every_n_epoch: 1
+  log_every_n_iter: 50
+  seed: 1337
+  best_metric: valid/acc1
+  best_mode: max
+
+task:
+  entry: train.fusion_det3d.fusion_det3d:FusionDet3DTask
+  kwargs:
+    data:
+      data_root: /Users/gwm/data/v1.0-mini
+      version: v1.0-mini
+      queue_length: 4
+      img_size: [256, 704]
+      num_cams: 6
+      use_lidar: true
+      class_names:
+        - car
+        - truck
+        - bus
+        - pedestrian
+        - motorcycle
+        - bicycle
+        - traffic_cone
+        - barrier
+    model:
+    train:
+      batch_size: 32
+      num_workers: 4
+    optim:
+      name: sgd
+      lr: 0.1
+      momentum: 0.9
+      nesterov: true
+      weight_decay: 0.0001
+    loss:
+      label_smoothing: 0.0
+
