@@ -5,6 +5,11 @@ from torch.utils.data import DataLoader
 from typing import Any, Dict, Optional, Tuple
 from .transform.nuscenes_bev_dataset import build_nuscenes_bev_dataloader
 from torchvision import transforms as T
+from .module.resnet_backbone import ResNetBackbone
+from ..common.module.fpn import FPN, ViewSelector
+from .module.bevformer_encoder import BEVFormerEncoder
+from .module.lidar_encoder import LidarEncoder
+from .module.bev_det3d_head import BEVDet3DHead
 
 
 class FusionDet3DTask(nn.Module):
@@ -24,19 +29,10 @@ class FusionDet3DTask(nn.Module):
         self._optim_cfg = dict(optim or {})
         self._loss_cfg = dict(loss or {})
 
-        self.model = torch.nn.Sequential(
-            torch.nn.Flatten(),
-            torch.nn.Linear(256 * 704 * 6, 100),
-            torch.nn.ReLU(),
-            torch.nn.Linear(100, 10),
-        )
-
-        self.loss = torch.nn.CrossEntropyLoss()
-
         self._batch_size = int(self._train_cfg.get("batch_size", 64))
         self._num_workers = int(self._train_cfg.get("num_workers", 8))
         self._lr = float(self._optim_cfg.get("lr", 1e-3))
-        
+
         # dataset
         self._data_root = self._data_cfg.get("data_root", "./data/nuscenes")
         self._data_version = self._data_cfg.get("version", "v1.0-trainval")
@@ -46,13 +42,70 @@ class FusionDet3DTask(nn.Module):
         self._use_lidar = bool(self._data_cfg.get("use_lidar", True))
         self._class_names = self._data_cfg.get("class_names", None)
 
+        # model
+        self._bev_shape = tuple(self._model_cfg.get("bev_shape", (75, 60)))  # H, W
+        self._point_cloud_range = self._model_cfg.get(
+            "pc_range", [-60.0, -60.0, -4.0, 140.0, 60.0, 4.0]
+        )
+        self._voxel_size = self._model_cfg.get("voxel_size", [1.0, 0.6, 2.0])
+        self._n_voxels = self._model_cfg.get("n_voxels", [75, 60, 1])
+        self._embed_dims = self._model_cfg.get("embed_dims", 256)
+
+        self._backbone = ResNetBackbone(
+            self._model_cfg.get("backbone_depth", 18),
+            pretrained=self._model_cfg.get("backbone_pretrained", True),
+            out_strides=self._model_cfg.get("backbone_out_strides", [8, 16, 32]),
+        )
+
+        self._neck = FPN(
+            in_channels=self._model_cfg.get("fpn_in_channels", [128, 256, 512]),
+            out_channels=self._model_cfg.get("fpn_out_channels", 256),
+            num_outs=self._model_cfg.get("fpn_num_outs", 3),
+            use_norm=self._model_cfg.get("fpn_use_norm", False),
+        )
+
+        self._img_bev_encoder = BEVFormerEncoder(
+            bev_h=self._bev_shape[0],
+            bev_w=self._bev_shape[1],
+            embed_dims=self._embed_dims,
+        )
+
+        self._lidar_encoder = (
+            LidarEncoder(
+                out_channels=self._embed_dims,
+                pc_range=self._point_cloud_range,
+                voxel_size=self._voxel_size,
+            )
+            if self._use_lidar
+            else None
+        )
+
+        self.fusion_layer = nn.Sequential(
+            nn.Conv2d(
+                self._embed_dims * 2,
+                self._embed_dims,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            nn.BatchNorm2d(self._embed_dims),
+            nn.ReLU(inplace=True),
+        )
+
+        self._head = BEVDet3DHead(
+            in_channels=self._embed_dims,
+            num_classes=len(self._class_names) if self._class_names is not None else 10,
+        )
+
+        self.loss = torch.nn.CrossEntropyLoss()
+
     def build_train_dataloader(
         self, ddp: bool, **cfg
     ) -> Tuple[DataLoader, Optional[Any]]:
         return build_nuscenes_bev_dataloader(
             data_root=self._data_root,
             version=self._data_version,
-            split='train',
+            split="train",
             is_ddp=ddp,
             queue_length=self._queue_length,
             img_size=self._img_size,
@@ -69,7 +122,7 @@ class FusionDet3DTask(nn.Module):
         return build_nuscenes_bev_dataloader(
             data_root=self._data_root,
             version=self._data_version,
-            split='val',
+            split="val",
             is_ddp=ddp,
             queue_length=self._queue_length,
             img_size=self._img_size,
@@ -81,22 +134,110 @@ class FusionDet3DTask(nn.Module):
         )
 
     def configure_optimizers(self, **cfg):
-        optimizer = torch.optim.SGD(
-            self.parameters(), lr=self._lr, momentum=0.9, weight_decay=5e-4
+        # 推荐配置
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=2e-4,  # Transformer 学习率通常比 CNN 低
+            weight_decay=1e-2,
         )
         return optimizer, None, "none"
 
     def _step(self, batch, ctx: Dict[str, Any]):
-        x, y = batch
-        x = x.to(ctx["device"], non_blocking=True)
-        y = y.to(ctx["device"], non_blocking=True)
-        logits = self.model(x)
-        loss = self.loss(logits, y)
-        acc = (logits.argmax(dim=-1) == y).float().mean()
-        return {"loss": loss, "metrics": {"acc": acc}}
+        imgs = batch["imgs"]  # (B, T, N, C, H, W)
+        lidar_points = batch.get("lidar_points", None)  # List[Tensor(N, 4)]
+        metas = batch["metas"]  # List[List[Dict]] (B, T)
+        gt_boxes = batch["gt_boxes"]  # List[Tensor]
+        gt_labels = batch["gt_labels"]  # List[Tensor]
+
+        B, T, N, C, H, W = imgs.shape
+        imgs_reshaped = imgs.view(B * T * N, C, H, W)
+        features = self._backbone(imgs_reshaped)  # Tuple of feature maps
+        features = self._neck(features)  # FPN 输出特征图列表
+
+        # 解析相机参数
+        camera_params = self._parse_camera_params(metas, B, T, N)  # (B, T, N, 3, 4)
+        # Image BEV Encoding
+        # 输入：多尺度特征，相机参数
+        # 输出：(B, C, BEV_H, BEV_W)
+        # 注意：这里我们通常只用当前帧或通过 Temporal Attention 融合多帧
+        # 为简化，假设 encoder 内部处理了 Temporal 逻辑
+        img_bev_feat = self._img_bev_encoder(
+            features, camera_params, batch_size=B, seq_len=T
+        )
+
+        # Lidar Encoding
+        lidar_bev_feat = None
+        if self._use_lidar and lidar_points:
+            lidar_bev_feat = self._lidar_encoder(lidar_points)  # (B, C, BEV_H, BEV_W)
+
+        # 融合 Image BEV 和 Lidar BEV 特征
+        if lidar_bev_feat is not None:
+            fused_bev_feat = torch.cat(
+                [img_bev_feat, lidar_bev_feat], dim=1
+            )  # (B, 2C, H, W)
+            bev_feat = self.fusion_layer(fused_bev_feat)  # (B, C, H, W)
+        else:
+            bev_feat = img_bev_feat  # (B, C, H, W)
+
+        # 检测头
+        preds = self._head(bev_feat)
+        loss_dict = self._head.loss(preds, gt_boxes, gt_labels)
+        loss_sum = sum(loss_dict.values())
+        metrics = {k: v.detach().item() for k, v in loss_dict.items()}
+        return {"loss": loss_sum, "metrics": metrics}
+
+    def _parse_camera_params(self, metas, B, T, N):
+        """
+        计算从 当前帧 Ego 坐标系 到 任意帧 Image 像素坐标系 的投影矩阵。
+            bev_point --> global_point --> cam_point --> img_point
+        矩阵形式为：
+        lidar2img = K @ inv(cam2ego) @ inv(ego2global_t) @ curr_ego2global
+
+        Returns:
+            lidar2img: (B, T, N, 4, 4)
+        """
+        lidar2img_list = []
+        for b in range(B):
+            curr_meta = metas[b][-1]  # 取当前帧
+            curr_ego2global = curr_meta["ego2globals"][0]  # (N, 4, 4)
+
+            t_list = []
+            for t in range(T):
+                n_list = []
+                frame_meta = metas[b][t]
+                # 当前帧的 ego2global
+                frame_ego2globals = frame_meta["ego2globals"]  # (N, 4, 4)
+                frame_cam2egos = frame_meta["cam2egos"]  # (N, 4, 4)
+                frame_intrinsics = frame_meta["intrinsics"]  # (N, 4, 4)
+
+                for n in range(N):
+                    K = frame_intrinsics[n]  # (4, 4)
+                    cam2ego = frame_cam2egos[n]  # (4, 4
+                    ego2global = frame_ego2globals[n]  # (4, 4)
+
+                    view_matrix = torch.matmul(
+                        torch.inverse(cam2ego), torch.inverse(ego2global)
+                    )  # (4, 4)
+
+                    global_to_img = torch.matmul(K, view_matrix)  # (4, 4)
+                    proj_matrix = torch.matmul(global_to_img, curr_ego2global)  # (4, 4)
+                    n_list.append(proj_matrix)
+
+                t_list.append(torch.stack(n_list))  # (N, 4, 4)
+            lidar2img_list.append(torch.stack(t_list))  # (T, N, 4, 4)
+
+        return torch.stack(lidar2img_list).to(
+            next(self.parameters()).device
+        )  # (B, T, N, 4, 4)
 
     def training_step(self, batch, ctx: Dict[str, Any]):
         return self._step(batch, ctx)
 
     def validation_step(self, batch, ctx: Dict[str, Any]):
         return self._step(batch, ctx)
+    
+    def get_freeze_targets(self) -> Dict[str, nn.Module]:
+        return {
+            "backbone": self._backbone,
+            "neck": self._neck,
+        }

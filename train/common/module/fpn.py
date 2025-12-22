@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ...common.module.conv import ConvBnAct, DepthwiseSeparableConv
+from .conv import ConvBnAct, DepthwiseSeparableConv
 
 class FPN(nn.Module):
     def __init__(self,

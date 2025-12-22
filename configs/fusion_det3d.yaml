@@ -6,17 +6,21 @@ runner:
   seed: 1337
   best_metric: valid/acc1
   best_mode: max
+  freeze:
+    targets: ["backbone"]
+    bn_eval: true   # keep BatchNorm in frozen targets in eval() during training
+    strict: true    # error if a pattern matches nothing
 
 task:
   entry: train.fusion_det3d.fusion_det3d:FusionDet3DTask
   kwargs:
     data:
-      data_root: /Users/gwm/data/v1.0-mini
+      data_root: train/fusion_det3d/data/nuscenes/v1.0-mini
       version: v1.0-mini
-      queue_length: 4
+      queue_length: 1
       img_size: [256, 704]
       num_cams: 6
-      use_lidar: true
+      use_lidar: false
       class_names:
         - car
         - truck
@@ -27,8 +31,13 @@ task:
         - traffic_cone
         - barrier
     model:
+      bev_shape: [75, 60]
+      pc_range: [-60.0, -60.0, -4.0, 140.0, 60.0, 4.0]
+      voxel_size: [1.0, 0.6, 2.0]
+      n_voxels: [75, 60, 1]
+      embed_dims: 256
     train:
-      batch_size: 32
+      batch_size: 2
       num_workers: 4
     optim:
       name: sgd

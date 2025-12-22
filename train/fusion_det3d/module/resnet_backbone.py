@@ -10,7 +10,6 @@ class ResNetBackbone(nn.Module):
         depth: int = 50,
         pretrained: bool = True,
         out_strides: list = [8, 16, 32],
-        train_backbone: bool = False,
     ):
         super().__init__()
         self.out_strides = out_strides
@@ -33,11 +32,6 @@ class ResNetBackbone(nn.Module):
         self.layer2 = backbone.layer2  # stride 8,  dim=512 (ResNet50) / 128 (ResNet18)
         self.layer3 = backbone.layer3  # stride 16, dim=1024 (ResNet50) / 256 (ResNet18)
         self.layer4 = backbone.layer4  # stride 32, dim=2048 (ResNet50) / 512 (ResNet18)
-
-        # 3. 冻结权重逻辑（默认冻结，除非显式传入 train_backbone=True）
-        if not train_backbone:
-            for param in self.parameters():
-                param.requires_grad = False
 
         # 删除不需要的全连接层以节省一点点内存
         del backbone.fc

@@ -109,10 +109,3 @@ class LightBackbone(nn.Module):
             if s in stage_outputs:
                 feats.append(stage_outputs[s])
         return tuple(feats)
-
-    def train(self, mode: bool = True):
-        super().train(mode)
-        if mode and self.norm_eval:
-            for m in self.modules():
-                if isinstance(m, nn.BatchNorm2d):
-                    m.eval()
