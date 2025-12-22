@@ -115,7 +115,7 @@ class NuScenesBEVDataset(Dataset):
         return data
     
     def _load_multiview_data(self, sample):
-        imgs, intrinsics, extrinsics = [], [], []
+        imgs, intrinsics, cam2egos, ego2globals = [], [], [], []
 
         for cam in self.cam_names:
             sd = self.nusc.get('sample_data', sample['data'][cam])
@@ -127,25 +127,42 @@ class NuScenesBEVDataset(Dataset):
             img = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.
             imgs.append(img)
 
-            intrinsics.append(torch.tensor(cs['camera_intrinsic'], dtype=torch.float32))
+            # 相机内参
+            intrin = torch.eye(4)
+            intrin[:3, :3] = torch.tensor(cs['camera_intrinsic'], dtype=torch.float32)
+            intrinsics.append(intrin)
 
+            # 外参：cam to ego
             cam2ego = transform_matrix(cs['translation'], Quaternion(cs['rotation']), inverse=False)
-            ego2global = transform_matrix(pose['translation'], Quaternion(pose['rotation']), inverse=False)
+            cam2egos.append(torch.from_numpy(cam2ego).float())
 
-            extrinsics.append(torch.from_numpy(ego2global @ cam2ego).float())
+            # 位姿：ego to global
+            ego2global = transform_matrix(pose['translation'], Quaternion(pose['rotation']), inverse=False)
+            ego2globals.append(torch.from_numpy(ego2global).float())
 
         return torch.stack(imgs), {
-            'intrinsics': torch.stack(intrinsics),
-            'extrinsics': torch.stack(extrinsics),
+            'intrinsics': torch.stack(intrinsics),      # (N, 4, 4)
+            'cam2egos': torch.stack(cam2egos),          # (N, 4, 4)
+            'ego2globals': torch.stack(ego2globals),    # (N, 4, 4)
         }
 
     
     def _load_lidar_data(self, sample):
         sd = self.nusc.get('sample_data', sample['data']['LIDAR_TOP'])
+        cs = self.nusc.get('calibrated_sensor', sd['calibrated_sensor_token'])
+        lidar2ego = transform_matrix(cs['translation'], Quaternion(cs['rotation']), inverse=False)
+        lidar2ego = torch.from_numpy(lidar2ego).float()
+        
         pc_path = os.path.join(self.data_root, sd['filename'])
-
         lidar_pc = LidarPointCloud.from_file(pc_path)
         points = torch.from_numpy(lidar_pc.points.T).float() # (N, 4)
+
+        # 坐标变换
+        point_xyz = points[:, :3]  # (N, 3)
+        point_xyz_hom = torch.cat([point_xyz, torch.ones((point_xyz[:, :1].shape), dtype=torch.float32)], dim=1)  # (N, 4)
+        point_xyz_ego = (lidar2ego @ point_xyz_hom.T).T # (N, 4)
+        points[:, :3] = point_xyz_ego[:, :3]
+
         return points
     
     def _load_annotations(self, sample):
