@@ -36,6 +36,11 @@ task:
       voxel_size: [1.0, 0.6, 2.0]
       n_voxels: [75, 60, 1]
       embed_dims: 256
+      num_heads: 8
+      num_levels: 3
+      num_points: 8
+      num_layers: 1
+      num_z: 8
     train:
       batch_size: 2
       num_workers: 4
@@ -47,4 +52,3 @@ task:
       weight_decay: 0.0001
     loss:
       label_smoothing: 0.0
-

@@ -88,6 +88,7 @@ class FusionDet3DTask(nn.Module):
                 out_channels=self._embed_dims,
                 pc_range=self._point_cloud_range,
                 voxel_size=self._voxel_size,
+                bev_shape=self._bev_shape,
             )
             if self._use_lidar
             else None
