@@ -79,8 +79,8 @@ class FusionDet3DTask(nn.Module):
             num_layers=self._num_layers,
             num_z=self._num_z,
             pc_range=self._point_cloud_range,
-            num_cams=self._num_cams,
             img_size=self._img_size,
+            fpn_out_channels=self._model_cfg.get("fpn_out_channels", 256),
         )
 
         self._lidar_encoder = (

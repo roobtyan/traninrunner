@@ -36,6 +36,8 @@ task:
       voxel_size: [1.0, 0.6, 2.0]
       n_voxels: [75, 60, 1]
       embed_dims: 256
+      fpn_out_channels: 256
+      fpn_num_outs: 3
       num_heads: 8
       num_levels: 3
       num_points: 8
@@ -52,10 +54,10 @@ task:
         rot: 1.0
         vel: 1.0
     train:
-      batch_size: 2
+      batch_size: 32
       num_workers: 4
     optim:
-      name: sgd
+      name: adamw
       lr: 0.1
       momentum: 0.9
       nesterov: true

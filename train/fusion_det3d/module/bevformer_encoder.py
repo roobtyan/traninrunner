@@ -57,10 +57,36 @@ def temporal_alignmnet(prev_bev, ego_motion, pc_range):
     return aligned_bev
 
 
+def bev_sincos_positional_encoding(bev_h, bev_w, embed_dims, device):
+    '''
+    生成二维正余弦位置编码 (H*W, C)
+    '''
+    if embed_dims % 4 != 0:
+        raise ValueError("embed_dims must be divisible by 4 for sincos pos encoding")
+    dim_each = embed_dims // 4
+
+    y_pos = torch.arange(bev_h, device=device, dtype=torch.float32)
+    x_pos = torch.arange(bev_w, device=device, dtype=torch.float32)
+    y_embed, x_embed = torch.meshgrid(y_pos, x_pos, indexing='ij')
+
+    y_embed = y_embed.reshape(-1, 1)
+    x_embed = x_embed.reshape(-1, 1)
+
+    omega = torch.arange(dim_each, device=device, dtype=torch.float32) / dim_each
+    omega = 1.0 / (10000 ** omega)
+
+    out_y = y_embed * omega
+    out_x = x_embed * omega
+
+    pos_y = torch.cat([torch.sin(out_y), torch.cos(out_y)], dim=1)
+    pos_x = torch.cat([torch.sin(out_x), torch.cos(out_x)], dim=1)
+    pos = torch.cat([pos_y, pos_x], dim=1) # (H*W, C)
+    return pos
+
+
 class SpatialCrossAttention(nn.Module):
-    def __init__(self, embed_dims, num_heads, num_levels, num_points, num_cams):
+    def __init__(self, embed_dims, num_heads, num_levels, num_points):
         super().__init__()
-        self.num_cams = num_cams
         self.num_levels = num_levels
         self.ms_deform_attn = MultiScaleDeformableAttention(
             embed_dims=embed_dims,
@@ -100,7 +126,7 @@ class SpatialCrossAttention(nn.Module):
 
         output = torch.zeros_like(query)
         valid = torch.zeros((B, num_query), device=device)
-        for cam in range(self.num_cams):
+        for cam in range(lidar2img.shape[1]):
             mask_cam = bev_mask[:, cam]
             if mask_cam.sum() == 0:
                 continue
@@ -156,7 +182,7 @@ class SpatialCrossAttention(nn.Module):
 
 
 class BEVFormerLayer(nn.Module):
-    def __init__(self, embed_dims, num_heads, num_levels, num_points, num_cams, ffn_dim, num_z):
+    def __init__(self, embed_dims, num_heads, num_levels, num_points, ffn_dim, num_z):
         super().__init__()
         self.num_z = num_z
         self.temporal_attn = nn.MultiheadAttention(embed_dims, num_heads, batch_first=True)
@@ -165,7 +191,6 @@ class BEVFormerLayer(nn.Module):
             num_heads=num_heads,
             num_levels=num_levels,
             num_points=num_points,
-            num_cams=num_cams,
         )
         self.ffn = nn.Sequential(
             nn.Linear(embed_dims, ffn_dim),
@@ -211,8 +236,8 @@ class BEVFormerEncoder(nn.Module):
         num_layers=1,
         num_z=8,
         pc_range=None,
-        num_cams=6,
         img_size=None,
+        fpn_out_channels=256,
     ):
         super().__init__()
         self.bev_h = bev_h
@@ -220,11 +245,9 @@ class BEVFormerEncoder(nn.Module):
         self.embed_dims = embed_dims
         self.num_z = num_z
         self.pc_range = pc_range or [-60.0, -60.0, -4.0, 140.0, 60.0, 4.0]
-        self.num_cams = num_cams
         self.img_size = img_size
 
         self.bev_embedding = nn.Embedding(bev_h * bev_w, embed_dims)
-        self.bev_pos_embedding = nn.Embedding(bev_h * bev_w, embed_dims)
 
         ffn_dim = embed_dims * 2
         self.layers = nn.ModuleList([
@@ -233,25 +256,32 @@ class BEVFormerEncoder(nn.Module):
                 num_heads=num_heads,
                 num_levels=num_levels,
                 num_points=num_points,
-                num_cams=num_cams,
                 ffn_dim=ffn_dim,
                 num_z=num_z,
             )
             for _ in range(num_layers)
         ])
+        self.input_proj = nn.ModuleList([
+            nn.Conv2d(fpn_out_channels, embed_dims, kernel_size=1)
+            for _ in range(num_levels)
+        ])
 
     def forward(self, mlvl_feats, lidar2img, ego_motion, batch_size, seq_len, img_size=None):
         # mlvl_feats: list[(B*T*N, C, H, W)]
-        num_cams = lidar2img.shape[2]
         img_size = img_size or self.img_size
 
+        num_cams = lidar2img.shape[2]
         mlvl_feats = [
-            feat.view(batch_size, seq_len, num_cams, feat.shape[1], feat.shape[2], feat.shape[3])
-            for feat in mlvl_feats
+            self.input_proj[i](feat).view(
+                batch_size, seq_len, num_cams, self.embed_dims, feat.shape[2], feat.shape[3]
+            )
+            for i, feat in enumerate(mlvl_feats)
         ]
 
         bev = self.bev_embedding.weight.unsqueeze(0).repeat(batch_size, 1, 1)
-        bev_pos = self.bev_pos_embedding.weight.unsqueeze(0).repeat(batch_size, 1, 1)
+        bev_pos = bev_sincos_positional_encoding(
+            self.bev_h, self.bev_w, self.embed_dims, bev.device
+        ).unsqueeze(0).repeat(batch_size, 1, 1)
         reference_points = get_reference_points(
             self.bev_h, self.bev_w, self.num_z, self.pc_range, bev.device
         )

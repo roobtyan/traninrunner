@@ -124,11 +124,15 @@ class NuScenesBEVDataset(Dataset):
 
             img = Image.open(os.path.join(self.data_root, sd['filename'])).convert('RGB')
             orig_w, orig_h = img.size
-            img = img.resize(self.img_size)
+            img_h, img_w = self.img_size
+            img = img.resize((img_w, img_h))
             new_w, new_h = img.size
             sx = new_w / orig_w
             sy = new_h / orig_h
             img = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+            img = (img - mean) / std
             imgs.append(img)
 
             # 相机内参
