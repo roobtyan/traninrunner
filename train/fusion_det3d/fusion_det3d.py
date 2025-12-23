@@ -156,6 +156,7 @@ class FusionDet3DTask(nn.Module):
 
         # 解析相机参数
         camera_params = self._parse_camera_params(metas, B, T, N)  # (B, T, N, 3, 4)
+        ego_emotion = self._parse_ego_emotion(metas, B, T)  # (B, T, 4, 4)
         # Image BEV Encoding
         # 输入：多尺度特征，相机参数
         # 输出：(B, C, BEV_H, BEV_W)
@@ -229,6 +230,32 @@ class FusionDet3DTask(nn.Module):
         return torch.stack(lidar2img_list).to(
             next(self.parameters()).device
         )  # (B, T, N, 4, 4)
+    
+    def _parse_ego_emotion(self, metas, B, T):
+        '''
+        T时刻坐标对齐到T-1时刻坐标系下的变换矩阵
+        '''
+        ego_emotion_list = []
+        for b in range(B):
+            t_list = []
+            for t in range(T):
+                if t == 0:
+                    t_list.append(torch.eye(4))
+                else:
+                    curr_ego2global = metas[b][t]["ego2globals"][0]  # (4, 4)
+                    prev_ego2global = metas[b][t-1]["ego2globals"][0]  # (4, 4)
+                    if not isinstance(curr_ego2global, torch.Tensor):
+                        curr_ego2global = torch.tensor(curr_ego2global)
+                    if not isinstance(prev_ego2global, torch.Tensor):
+                        prev_ego2global = torch.tensor(prev_ego2global)
+                    ego2ego = torch.matmul(
+                        torch.inverse(prev_ego2global), curr_ego2global
+                    )  # (4, 4)
+                    t_list.append(ego2ego)
+            ego_emotion_list.append(torch.stack(t_list))  # (T, 4, 4)
+        return torch.stack(ego_emotion_list).to(
+            next(self.parameters()).device
+        )  # (B, T, 4, 4)
 
     def training_step(self, batch, ctx: Dict[str, Any]):
         return self._step(batch, ctx)

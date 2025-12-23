@@ -2,7 +2,7 @@ pandas
 torch
 torchvision
 d2l
-numpy
+numpy==1.23.5
 matplotlib
 nuscenes-devkit
 tqdm
