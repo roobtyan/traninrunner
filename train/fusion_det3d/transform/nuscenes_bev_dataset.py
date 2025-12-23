@@ -169,26 +169,42 @@ class NuScenesBEVDataset(Dataset):
         boxes = []
         labels = []
 
+        sd = self.nusc.get('sample_data', sample['data']['LIDAR_TOP'])
+        pose = self.nusc.get('ego_pose', sd['ego_pose_token'])
+        global_to_ego = transform_matrix(pose['translation'], Quaternion(pose['rotation']), inverse=True)
+        global_to_ego_rot = Quaternion(pose['rotation']).inverse
+
         for ann_token in sample['anns']:
             ann = self.nusc.get('sample_annotation', ann_token)
             name = ann['category_name'].split('.')[0]
             if name not in self.class_names:
                 continue
 
-            center = ann['translation']
             size = ann['size']
-            yaw = Quaternion(ann['rotation']).yaw_pitch_roll[0]
+            center = np.array(ann['translation'] + [1.0], dtype=np.float32)
+            center_ego = global_to_ego @ center
+            box_rot = Quaternion(ann['rotation'])
+            box_rot_ego = global_to_ego_rot * box_rot
+            yaw = box_rot_ego.yaw_pitch_roll[0]
+
+            vel = self.nusc.box_velocity(ann_token)
+            vx, vy = 0.0, 0.0
+            if vel is not None:
+                vel = np.array(vel, dtype=np.float32)
+                if not np.isnan(vel).any():
+                    vel_ego = global_to_ego_rot.rotate(vel)
+                    vx, vy = float(vel_ego[0]), float(vel_ego[1])
 
             boxes.append([
-                center[0], center[1], center[2],
+                center_ego[0], center_ego[1], center_ego[2],
                 size[0], size[1], size[2],
-                yaw
+                yaw, vx, vy
             ])
 
             labels.append(self.class_names.index(name))
 
         if len(boxes) == 0:
-            boxes = torch.zeros((0, 7), dtype=torch.float32)
+            boxes = torch.zeros((0, 9), dtype=torch.float32)
             labels = torch.zeros((0,), dtype=torch.int64)
         else:
             boxes = torch.tensor(boxes, dtype=torch.float32)
