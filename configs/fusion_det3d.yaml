@@ -1,5 +1,6 @@
 runner:
   work_dir: ./runs
+  mode: train
   epochs: 5
   valid_every_n_epoch: 1
   log_every_n_iter: 50

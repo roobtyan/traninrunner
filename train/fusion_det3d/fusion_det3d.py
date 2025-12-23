@@ -345,6 +345,9 @@ class FusionDet3DTask(nn.Module):
 
         return {"loss": loss_sum, "metrics": metrics}
 
+    def inference_step(self, batch, ctx: Dict[str, Any]):
+        return self.validation_step(batch, ctx)
+
     def validation_epoch_end(self, ctx: Dict[str, Any]):
         if not self._val_results:
             return {}
