@@ -41,6 +41,16 @@ task:
       num_points: 8
       num_layers: 1
       num_z: 8
+      max_objs: 500
+      min_overlap: 0.1
+      min_radius: 2
+      loss_weights:
+        hm: 1.0
+        offset: 1.0
+        height: 1.0
+        dim: 1.0
+        rot: 1.0
+        vel: 1.0
     train:
       batch_size: 2
       num_workers: 4

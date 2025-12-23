@@ -109,9 +109,14 @@ class FusionDet3DTask(nn.Module):
         self._head = BEVDet3DHead(
             in_channels=self._embed_dims,
             num_classes=len(self._class_names) if self._class_names is not None else 10,
+            bev_h=self._bev_shape[0],
+            bev_w=self._bev_shape[1],
+            pc_range=self._point_cloud_range,
+            max_objs=int(self._model_cfg.get("max_objs", 500)),
+            min_overlap=float(self._model_cfg.get("min_overlap", 0.1)),
+            min_radius=int(self._model_cfg.get("min_radius", 2)),
+            loss_weights=self._model_cfg.get("loss_weights", None),
         )
-
-        self.loss = torch.nn.CrossEntropyLoss()
 
     def build_train_dataloader(
         self, ddp: bool, **cfg
@@ -174,8 +179,6 @@ class FusionDet3DTask(nn.Module):
         # Image BEV Encoding
         # 输入：多尺度特征，相机参数
         # 输出：(B, C, BEV_H, BEV_W)
-        # 注意：这里我们通常只用当前帧或通过 Temporal Attention 融合多帧
-        # 为简化，假设 encoder 内部处理了 Temporal 逻辑
         img_bev_feat = self._img_bev_encoder(
             features,
             camera_params,
