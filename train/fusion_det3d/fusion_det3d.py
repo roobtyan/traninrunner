@@ -50,6 +50,11 @@ class FusionDet3DTask(nn.Module):
         self._voxel_size = self._model_cfg.get("voxel_size", [1.0, 0.6, 2.0])
         self._n_voxels = self._model_cfg.get("n_voxels", [75, 60, 1])
         self._embed_dims = self._model_cfg.get("embed_dims", 256)
+        self._num_heads = int(self._model_cfg.get("num_heads", 8))
+        self._num_levels = int(self._model_cfg.get("fpn_num_outs", 3))
+        self._num_points = int(self._model_cfg.get("num_points", 8))
+        self._num_layers = int(self._model_cfg.get("num_layers", 1))
+        self._num_z = int(self._model_cfg.get("num_z", 8))
 
         self._backbone = ResNetBackbone(
             self._model_cfg.get("backbone_depth", 18),
@@ -68,6 +73,14 @@ class FusionDet3DTask(nn.Module):
             bev_h=self._bev_shape[0],
             bev_w=self._bev_shape[1],
             embed_dims=self._embed_dims,
+            num_heads=self._num_heads,
+            num_levels=self._num_levels,
+            num_points=self._num_points,
+            num_layers=self._num_layers,
+            num_z=self._num_z,
+            pc_range=self._point_cloud_range,
+            num_cams=self._num_cams,
+            img_size=self._img_size,
         )
 
         self._lidar_encoder = (
@@ -155,7 +168,7 @@ class FusionDet3DTask(nn.Module):
         features = self._neck(features)  # FPN 输出特征图列表
 
         # 解析相机参数
-        camera_params = self._parse_camera_params(metas, B, T, N)  # (B, T, N, 3, 4)
+        camera_params = self._parse_camera_params(metas, B, T, N)  # (B, T, N, 4, 4)
         ego_emotion = self._parse_ego_emotion(metas, B, T)  # (B, T, 4, 4)
         # Image BEV Encoding
         # 输入：多尺度特征，相机参数
@@ -163,7 +176,12 @@ class FusionDet3DTask(nn.Module):
         # 注意：这里我们通常只用当前帧或通过 Temporal Attention 融合多帧
         # 为简化，假设 encoder 内部处理了 Temporal 逻辑
         img_bev_feat = self._img_bev_encoder(
-            features, camera_params, batch_size=B, seq_len=T
+            features,
+            camera_params,
+            ego_emotion,
+            batch_size=B,
+            seq_len=T,
+            img_size=(H, W),
         )
 
         # Lidar Encoding
@@ -189,39 +207,27 @@ class FusionDet3DTask(nn.Module):
 
     def _parse_camera_params(self, metas, B, T, N):
         """
-        计算从 当前帧 Ego 坐标系 到 任意帧 Image 像素坐标系 的投影矩阵。
-            bev_point --> global_point --> cam_point --> img_point
+        计算从 当前帧 Ego 坐标系 到 Image 像素坐标系 的投影矩阵。
+            bev_point(ego) --> cam_point --> img_point
         矩阵形式为：
-        lidar2img = K @ inv(cam2ego) @ inv(ego2global_t) @ curr_ego2global
+        lidar2img = K @ inv(cam2ego)
 
         Returns:
             lidar2img: (B, T, N, 4, 4)
         """
         lidar2img_list = []
         for b in range(B):
-            curr_meta = metas[b][-1]  # 取当前帧
-            curr_ego2global = curr_meta["ego2globals"][0]  # (N, 4, 4)
-
             t_list = []
             for t in range(T):
                 n_list = []
                 frame_meta = metas[b][t]
-                # 当前帧的 ego2global
-                frame_ego2globals = frame_meta["ego2globals"]  # (N, 4, 4)
                 frame_cam2egos = frame_meta["cam2egos"]  # (N, 4, 4)
                 frame_intrinsics = frame_meta["intrinsics"]  # (N, 4, 4)
 
                 for n in range(N):
                     K = frame_intrinsics[n]  # (4, 4)
                     cam2ego = frame_cam2egos[n]  # (4, 4
-                    ego2global = frame_ego2globals[n]  # (4, 4)
-
-                    view_matrix = torch.matmul(
-                        torch.inverse(cam2ego), torch.inverse(ego2global)
-                    )  # (4, 4)
-
-                    global_to_img = torch.matmul(K, view_matrix)  # (4, 4)
-                    proj_matrix = torch.matmul(global_to_img, curr_ego2global)  # (4, 4)
+                    proj_matrix = torch.matmul(K, torch.inverse(cam2ego))  # (4, 4)
                     n_list.append(proj_matrix)
 
                 t_list.append(torch.stack(n_list))  # (N, 4, 4)
@@ -233,7 +239,7 @@ class FusionDet3DTask(nn.Module):
     
     def _parse_ego_emotion(self, metas, B, T):
         '''
-        T时刻坐标对齐到T-1时刻坐标系下的变换矩阵
+        T-1时刻坐标对齐到T时刻坐标系下的变换矩阵
         '''
         ego_emotion_list = []
         for b in range(B):
@@ -249,7 +255,7 @@ class FusionDet3DTask(nn.Module):
                     if not isinstance(prev_ego2global, torch.Tensor):
                         prev_ego2global = torch.tensor(prev_ego2global)
                     ego2ego = torch.matmul(
-                        torch.inverse(prev_ego2global), curr_ego2global
+                        torch.inverse(curr_ego2global), prev_ego2global
                     )  # (4, 4)
                     t_list.append(ego2ego)
             ego_emotion_list.append(torch.stack(t_list))  # (T, 4, 4)
