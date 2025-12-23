@@ -16,6 +16,7 @@ class RunnerConfig:
     task_entry: str = ""
     work_dir: str = "./runs"
     run_name: Optional[str] = None
+    mode: str = "train"  # train | val | infer
     epochs: int = 1
     valid_every_n_epoch: int = 1
     log_every_n_iter: int = 50
@@ -94,6 +95,7 @@ def parse_config(argv: Optional[List[str]] = None) -> Tuple[RunnerConfig, Dict[s
     parser.add_argument("--task-entry", type=str, default=None, help="Python path: module:attr")
     parser.add_argument("--work-dir", type=str, default=None, help="Run root directory")
     parser.add_argument("--run-name", type=str, default=None, help="Optional run folder name override")
+    parser.add_argument("--mode", type=str, default=None, choices=["train", "val", "infer"])
     parser.add_argument("--epochs", type=int, default=None, help="Total epochs")
     parser.add_argument("--valid-every-n-epoch", type=int, default=None)
     parser.add_argument("--log-every-n-iter", type=int, default=None)
@@ -118,6 +120,8 @@ def parse_config(argv: Optional[List[str]] = None) -> Tuple[RunnerConfig, Dict[s
         flags_cfg["runner"]["work_dir"] = args.work_dir
     if args.run_name is not None:
         flags_cfg["runner"]["run_name"] = args.run_name
+    if args.mode is not None:
+        flags_cfg["runner"]["mode"] = args.mode
     if args.epochs is not None:
         flags_cfg["runner"]["epochs"] = args.epochs
     if args.valid_every_n_epoch is not None:

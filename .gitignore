@@ -10,3 +10,5 @@ pyproject.toml
 *.log
 trainrunner.egg-info/
 cifar-100-python/
+Agents.md
+data/

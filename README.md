@@ -23,6 +23,13 @@ pip install -e .
 python -m trainrunner.run --config configs/minimal.yaml
 ```
 
+## Validation-only / Inference-only
+
+```bash
+python -m trainrunner.run --config configs/minimal.yaml --mode val --resume /path/to/latest.pth
+python -m trainrunner.run --config configs/minimal.yaml --mode infer --resume /path/to/latest.pth
+```
+
 ## Run (DDP, recommended wrapper)
 
 ```bash
