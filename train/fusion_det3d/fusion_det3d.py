@@ -1,4 +1,6 @@
+import os
 import torch
+import torch.distributed as dist
 
 from torch import nn
 from torch.utils.data import DataLoader
@@ -10,6 +12,7 @@ from ..common.module.fpn import FPN, ViewSelector
 from .module.bevformer_encoder import BEVFormerEncoder
 from .module.lidar_encoder import LidarEncoder
 from .module.bev_det3d_head import BEVDet3DHead
+from .eval import decode_center_head, format_nuscenes_results, evaluate_nuscenes, visualize_sample
 
 
 class FusionDet3DTask(nn.Module):
@@ -19,6 +22,7 @@ class FusionDet3DTask(nn.Module):
         data: Dict[str, Any],
         model: Optional[Dict[str, Any]] = None,
         train: Optional[Dict[str, Any]] = None,
+        val: Optional[Dict[str, Any]] = None,
         optim: Optional[Dict[str, Any]] = None,
         loss: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -26,6 +30,7 @@ class FusionDet3DTask(nn.Module):
         self._data_cfg = dict(data or {})
         self._model_cfg = dict(model or {})
         self._train_cfg = dict(train or {})
+        self._val_cfg = dict(val or {})
         self._optim_cfg = dict(optim or {})
         self._loss_cfg = dict(loss or {})
 
@@ -55,6 +60,17 @@ class FusionDet3DTask(nn.Module):
         self._num_points = int(self._model_cfg.get("num_points", 8))
         self._num_layers = int(self._model_cfg.get("num_layers", 1))
         self._num_z = int(self._model_cfg.get("num_z", 8))
+
+        self._val_score_thresh = float(self._val_cfg.get("score_thresh", 0.1))
+        self._val_max_per_img = int(self._val_cfg.get("max_per_img", 100))
+        self._val_vis_enable = bool(self._val_cfg.get("vis_enable", False))
+        self._val_vis_topk = int(self._val_cfg.get("vis_topk", 50))
+        self._val_vis_dir = str(self._val_cfg.get("vis_dir", "vis"))
+        self._val_speed_thresh = float(self._val_cfg.get("speed_thresh", 0.2))
+        self._val_eval_cfg = str(self._val_cfg.get("eval_cfg", "detection_cvpr_2019"))
+        self._val_eval_set = self._val_cfg.get("eval_set", None)
+        self._val_results = []
+        self._val_epoch = None
 
         self._backbone = ResNetBackbone(
             self._model_cfg.get("backbone_depth", 18),
@@ -161,7 +177,7 @@ class FusionDet3DTask(nn.Module):
         )
         return optimizer, None, "none"
 
-    def _step(self, batch, ctx: Dict[str, Any]):
+    def _forward(self, batch):
         imgs = batch["imgs"]  # (B, T, N, C, H, W)
         lidar_points = batch.get("lidar_points", None)  # List[Tensor(N, 4)]
         metas = batch["metas"]  # List[List[Dict]] (B, T)
@@ -207,6 +223,10 @@ class FusionDet3DTask(nn.Module):
         loss_dict = self._head.loss(preds, gt_boxes, gt_labels)
         loss_sum = sum(loss_dict.values())
         metrics = {k: v.detach().item() for k, v in loss_dict.items()}
+        return preds, loss_sum, metrics
+
+    def _step(self, batch, ctx: Dict[str, Any]):
+        _, loss_sum, metrics = self._forward(batch)
         return {"loss": loss_sum, "metrics": metrics}
 
     def _parse_camera_params(self, metas, B, T, N):
@@ -271,7 +291,104 @@ class FusionDet3DTask(nn.Module):
         return self._step(batch, ctx)
 
     def validation_step(self, batch, ctx: Dict[str, Any]):
-        return self._step(batch, ctx)
+        preds, loss_sum, metrics = self._forward(batch)
+        imgs = batch["imgs"]
+        metas = batch["metas"]
+        gt_boxes = batch["gt_boxes"]
+        gt_labels = batch["gt_labels"]
+
+        if self._val_epoch != ctx.get("epoch"):
+            self._val_epoch = ctx.get("epoch")
+            self._val_results = []
+
+        dets = decode_center_head(
+            preds["hm"],
+            preds["reg"],
+            self._point_cloud_range,
+            score_thresh=self._val_score_thresh,
+            max_per_img=self._val_max_per_img,
+        )
+
+        b, t, n, _, h, w = imgs.shape
+        for i in range(b):
+            frame_meta = metas[i][-1]
+            sample_token = frame_meta.get("sample_token", "")
+            self._val_results.append(
+                {
+                    "sample_token": sample_token,
+                    "boxes_3d": dets[i]["boxes_3d"].detach().cpu(),
+                    "scores": dets[i]["scores"].detach().cpu(),
+                    "labels": dets[i]["labels"].detach().cpu(),
+                }
+            )
+
+            if self._val_vis_enable and ctx.get("is_main_process", False):
+                run_dir = ctx.get("run_dir", "")
+                vis_dir = os.path.join(run_dir, self._val_vis_dir)
+                file_name = f"{sample_token}.jpg" if sample_token else f"step_{ctx.get('step_in_epoch', 0)}.jpg"
+                save_path = os.path.join(vis_dir, file_name)
+                visualize_sample(
+                    frame_meta,
+                    {
+                        "boxes_3d": dets[i]["boxes_3d"].detach().cpu(),
+                        "scores": dets[i]["scores"].detach().cpu(),
+                        "labels": dets[i]["labels"].detach().cpu(),
+                        "hm": preds["hm"][i].detach().cpu(),
+                    },
+                    gt_boxes[i].detach().cpu(),
+                    gt_labels[i].detach().cpu(),
+                    self._class_names,
+                    save_path,
+                    img_size=(h, w),
+                    topk=self._val_vis_topk,
+                )
+
+        return {"loss": loss_sum, "metrics": metrics}
+
+    def validation_epoch_end(self, ctx: Dict[str, Any]):
+        if not self._val_results:
+            return {}
+
+        all_results = self._val_results
+        if dist.is_initialized():
+            gathered = [None for _ in range(dist.get_world_size())]
+            dist.all_gather_object(gathered, self._val_results)
+            all_results = []
+            for part in gathered:
+                all_results.extend(part or [])
+
+        if not ctx.get("is_main_process", False):
+            return {}
+
+        run_dir = ctx.get("run_dir", "")
+        output_dir = os.path.join(run_dir, "metrics")
+        results = format_nuscenes_results(
+            all_results,
+            self._class_names,
+            score_thresh=self._val_score_thresh,
+            speed_thresh=self._val_speed_thresh,
+            use_lidar=self._use_lidar,
+        )
+        metrics_summary, _ = evaluate_nuscenes(
+            data_root=self._data_root,
+            version=self._data_version,
+            results=results,
+            output_dir=output_dir,
+            eval_cfg=self._val_eval_cfg,
+            eval_set=self._val_eval_set,
+        )
+        summary = metrics_summary if isinstance(metrics_summary, dict) else {}
+        tp_errors = summary.get("tp_errors", {})
+        metrics = {
+            "nuscenes/mAP": float(summary.get("mean_ap", 0.0)),
+            "nuscenes/NDS": float(summary.get("nd_score", 0.0)),
+            "nuscenes/ATE": float(tp_errors.get("trans_err", 0.0)),
+            "nuscenes/ASE": float(tp_errors.get("scale_err", 0.0)),
+            "nuscenes/AOE": float(tp_errors.get("orient_err", 0.0)),
+            "nuscenes/AVE": float(tp_errors.get("vel_err", 0.0)),
+            "nuscenes/AAE": float(tp_errors.get("attr_err", 0.0)),
+        }
+        return metrics
     
     def get_freeze_targets(self) -> Dict[str, nn.Module]:
         return {

@@ -116,13 +116,15 @@ class NuScenesBEVDataset(Dataset):
     
     def _load_multiview_data(self, sample):
         imgs, intrinsics, cam2egos, ego2globals = [], [], [], []
+        img_paths = []
 
         for cam in self.cam_names:
             sd = self.nusc.get('sample_data', sample['data'][cam])
             cs = self.nusc.get('calibrated_sensor', sd['calibrated_sensor_token'])
             pose = self.nusc.get('ego_pose', sd['ego_pose_token'])
 
-            img = Image.open(os.path.join(self.data_root, sd['filename'])).convert('RGB')
+            img_path = os.path.join(self.data_root, sd['filename'])
+            img = Image.open(img_path).convert('RGB')
             orig_w, orig_h = img.size
             img_h, img_w = self.img_size
             img = img.resize((img_w, img_h))
@@ -134,6 +136,7 @@ class NuScenesBEVDataset(Dataset):
             std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
             img = (img - mean) / std
             imgs.append(img)
+            img_paths.append(img_path)
 
             # 相机内参
             intrin = torch.eye(4)
@@ -153,6 +156,8 @@ class NuScenesBEVDataset(Dataset):
             ego2globals.append(torch.from_numpy(ego2global).float())
 
         return torch.stack(imgs), {
+            'sample_token': sample['token'],
+            'img_paths': img_paths,
             'intrinsics': torch.stack(intrinsics),      # (N, 4, 4)
             'cam2egos': torch.stack(cam2egos),          # (N, 4, 4)
             'ego2globals': torch.stack(ego2globals),    # (N, 4, 4)
