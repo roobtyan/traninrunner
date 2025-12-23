@@ -131,24 +131,32 @@ class SpatialCrossAttention(nn.Module):
             if mask_cam.sum() == 0:
                 continue
 
-            ref_cam = ref_2d[:, cam].unsqueeze(2).repeat(1, 1, self.num_levels, 1)
-            value = torch.cat(
-                [feat[:, cam].flatten(2).transpose(1, 2) for feat in mlvl_feats],
-                dim=1,
-            )
+            for b in range(B):
+                valid_idx = mask_cam[b].nonzero(as_tuple=False).squeeze(-1)
+                if valid_idx.numel() == 0:
+                    continue
 
-            attn_out = self.ms_deform_attn(
-                query=query,
-                value=value,
-                identity=torch.zeros_like(query),
-                query_pos=query_pos,
-                reference_points=ref_cam,
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-            )
-            weight = mask_cam.unsqueeze(-1).float()
-            output += attn_out * weight
-            valid += mask_cam.float()
+                ref_cam = ref_2d[b, cam, valid_idx].unsqueeze(0).unsqueeze(2)
+                ref_cam = ref_cam.repeat(1, 1, self.num_levels, 1)
+                value = torch.cat(
+                    [
+                        feat[b, cam].flatten(1).transpose(0, 1).unsqueeze(0)
+                        for feat in mlvl_feats
+                    ],
+                    dim=1,
+                )
+
+                attn_out = self.ms_deform_attn(
+                    query=query[b : b + 1, valid_idx],
+                    value=value,
+                    identity=torch.zeros((1, valid_idx.numel(), query.shape[-1]), device=device),
+                    query_pos=query_pos[b : b + 1, valid_idx],
+                    reference_points=ref_cam,
+                    spatial_shapes=spatial_shapes,
+                    level_start_index=level_start_index,
+                )
+                output[b, valid_idx] += attn_out.squeeze(0)
+                valid[b, valid_idx] += 1.0
 
         valid = valid.clamp(min=1.0)
         output = output / valid.unsqueeze(-1)
