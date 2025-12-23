@@ -123,13 +123,21 @@ class NuScenesBEVDataset(Dataset):
             pose = self.nusc.get('ego_pose', sd['ego_pose_token'])
 
             img = Image.open(os.path.join(self.data_root, sd['filename'])).convert('RGB')
+            orig_w, orig_h = img.size
             img = img.resize(self.img_size)
+            new_w, new_h = img.size
+            sx = new_w / orig_w
+            sy = new_h / orig_h
             img = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.
             imgs.append(img)
 
             # 相机内参
             intrin = torch.eye(4)
             intrin[:3, :3] = torch.tensor(cs['camera_intrinsic'], dtype=torch.float32)
+            intrin[0, 0] *= sx
+            intrin[0, 2] *= sx
+            intrin[1, 1] *= sy
+            intrin[1, 2] *= sy
             intrinsics.append(intrin)
 
             # 外参：cam to ego
