@@ -288,29 +288,31 @@ class BEVFormerEncoder(nn.Module):
 
         prev_bev = None
         for t in range(seq_len):
-            feats_t = [feat[:, t] for feat in mlvl_feats]
-            lidar2img_t = lidar2img[:, t]
+            use_grad = t == (seq_len - 1)
+            with torch.set_grad_enabled(use_grad):
+                feats_t = [feat[:, t] for feat in mlvl_feats]
+                lidar2img_t = lidar2img[:, t]
 
-            prev_bev_aligned = None
-            if prev_bev is not None and ego_motion is not None:
-                motion_t = ego_motion[:, t]
-                prev_bev_aligned = temporal_alignmnet(prev_bev, motion_t, self.pc_range)
-                prev_bev_aligned = prev_bev_aligned.flatten(2).transpose(1, 2)
+                prev_bev_aligned = None
+                if prev_bev is not None and ego_motion is not None:
+                    motion_t = ego_motion[:, t]
+                    prev_bev_aligned = temporal_alignmnet(prev_bev, motion_t, self.pc_range)
+                    prev_bev_aligned = prev_bev_aligned.flatten(2).transpose(1, 2)
 
-            bev_t = bev
-            for layer in self.layers:
-                bev_t = layer(
-                    bev_t,
-                    bev_pos,
-                    prev_bev_aligned,
-                    feats_t,
-                    lidar2img_t,
-                    img_size,
-                    reference_points,
+                bev_t = bev
+                for layer in self.layers:
+                    bev_t = layer(
+                        bev_t,
+                        bev_pos,
+                        prev_bev_aligned,
+                        feats_t,
+                        lidar2img_t,
+                        img_size,
+                        reference_points,
+                    )
+
+                prev_bev = bev_t.transpose(1, 2).reshape(
+                    batch_size, self.embed_dims, self.bev_h, self.bev_w
                 )
-
-            prev_bev = bev_t.transpose(1, 2).reshape(
-                batch_size, self.embed_dims, self.bev_h, self.bev_w
-            )
 
         return prev_bev
