@@ -46,6 +46,22 @@ class NuScenesBEVDataset(Dataset):
             'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
             'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
         ]
+        self.name_mapping = {
+            'movable_object.barrier': 'barrier',
+            'movable_object.trafficcone': 'traffic_cone',
+            'vehicle.bicycle': 'bicycle',
+            'vehicle.bus.bendy': 'bus',
+            'vehicle.bus.rigid': 'bus',
+            'vehicle.car': 'car',
+            'vehicle.construction': 'construction_vehicle',
+            'vehicle.motorcycle': 'motorcycle',
+            'human.pedestrian.adult': 'pedestrian',
+            'human.pedestrian.child': 'pedestrian',
+            'human.pedestrian.construction_worker': 'pedestrian',
+            'human.pedestrian.police_officer': 'pedestrian',
+            'vehicle.trailer': 'trailer',
+            'vehicle.truck': 'truck',
+        }
 
         self.sample_tokens = self._build_sample_list(split)
 
@@ -193,8 +209,8 @@ class NuScenesBEVDataset(Dataset):
 
         for ann_token in sample['anns']:
             ann = self.nusc.get('sample_annotation', ann_token)
-            name = ann['category_name'].split('.')[0]
-            if name not in self.class_names:
+            name = self.name_mapping.get(ann['category_name'], None)
+            if name is None or name not in self.class_names:
                 continue
 
             size = ann['size']
