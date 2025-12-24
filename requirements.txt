@@ -1,5 +1,5 @@
 pandas
-torch
+torch==2.4.0
 torchvision
 d2l
 numpy==1.23.5
