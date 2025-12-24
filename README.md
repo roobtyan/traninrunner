@@ -84,6 +84,7 @@ Provide `task.entry=some.module:TaskClassOrFactory`. The resolved object must sa
 - `build_train_dataloader(ddp: bool, **cfg) -> (DataLoader, sampler|None)`
 - `build_valid_dataloader(ddp: bool, **cfg) -> (DataLoader, sampler|None)`
 - `configure_optimizers(**cfg) -> (optimizer, lr_scheduler|None, scheduler_step: 'iter'|'epoch'|'none')`
+- `prepare_batch(batch, ctx) -> batch` (optional; device move / preprocess)
 - `training_step(batch, ctx) -> dict(loss=Tensor, metrics=dict)`
 - `validation_step(batch, ctx) -> dict(loss=Tensor, metrics=dict)`
 

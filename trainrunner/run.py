@@ -101,6 +101,12 @@ def _device_string(dist: DistInfo) -> str:
     return "cpu"
 
 
+def _prepare_batch(model_obj: Any, batch: Any, ctx: Dict[str, Any]):
+    if hasattr(model_obj, "prepare_batch"):
+        return model_obj.prepare_batch(batch, ctx)
+    return batch
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     runner, task_kwargs, resolved = parse_config(argv)
     dist = setup_distributed()
@@ -248,17 +254,16 @@ def _main(runner: RunnerConfig, task_kwargs: Dict[str, Any], resolved: Dict[str,
                 with ExitStack() as stack:
                     for p in plugins:
                         stack.enter_context(p.train_step_ctx(model_obj, cfg={"runner": asdict(runner), "task": task_kwargs}))
-                    out = training_step(
-                        batch,
-                        ctx={
-                            "epoch": epoch,
-                            "step_in_epoch": step_in_epoch,
-                            "global_step": global_step,
-                            "device": dist.device,
-                            "run_dir": run_dir,
-                            "is_main_process": dist.is_main_process,
-                        },
-                    )
+                ctx = {
+                    "epoch": epoch,
+                    "step_in_epoch": step_in_epoch,
+                    "global_step": global_step,
+                    "device": dist.device,
+                    "run_dir": run_dir,
+                    "is_main_process": dist.is_main_process,
+                }
+                batch = _prepare_batch(model_obj, batch, ctx)
+                out = training_step(batch, ctx=ctx)
 
                 loss = out["loss"]
                 metrics = out.get("metrics", {})
@@ -352,29 +357,24 @@ def _main(runner: RunnerConfig, task_kwargs: Dict[str, Any], resolved: Dict[str,
                             stack.enter_context(
                                 p.valid_step_ctx(model_obj, cfg={"runner": asdict(runner), "task": task_kwargs})
                             )
+                        ctx = {
+                            "epoch": epoch,
+                            "step_in_epoch": v_step,
+                            "global_step": global_step,
+                            "device": dist.device,
+                            "run_dir": run_dir,
+                            "is_main_process": dist.is_main_process,
+                        }
+                        v_batch = _prepare_batch(model_obj, v_batch, ctx)
                         if runner.mode == "infer" and inference_step is not None:
                             out = inference_step(
                                 v_batch,
-                                ctx={
-                                    "epoch": epoch,
-                                    "step_in_epoch": v_step,
-                                    "global_step": global_step,
-                                    "device": dist.device,
-                                    "run_dir": run_dir,
-                                    "is_main_process": dist.is_main_process,
-                                },
+                                ctx=ctx,
                             )
                         else:
                             out = validation_step(
                                 v_batch,
-                                ctx={
-                                    "epoch": epoch,
-                                    "step_in_epoch": v_step,
-                                    "global_step": global_step,
-                                    "device": dist.device,
-                                    "run_dir": run_dir,
-                                    "is_main_process": dist.is_main_process,
-                                },
+                                ctx=ctx,
                             )
 
                     v_loss = out.get("loss", None)
