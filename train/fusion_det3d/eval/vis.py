@@ -110,7 +110,7 @@ def _build_heatmap_panel(
     img = Image.new("RGB", (w, h), (0, 0, 0))
     if k <= 0:
         return img.resize(out_size)
-    scores, inds = torch.topk(hm.view(-1), k)
+    scores, inds = torch.topk(hm.reshape(-1), k)
     colors = [
         (255, 64, 64),
         (64, 255, 64),
