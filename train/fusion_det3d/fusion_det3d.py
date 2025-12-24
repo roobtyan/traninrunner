@@ -177,6 +177,18 @@ class FusionDet3DTask(nn.Module):
         )
         return optimizer, None, "none"
 
+    def prepare_batch(self, batch, ctx: Dict[str, Any]):
+        device = ctx["device"]
+        batch = dict(batch)
+        batch["imgs"] = batch["imgs"].to(device, non_blocking=True)
+        if "lidar_points" in batch and batch["lidar_points"] is not None:
+            batch["lidar_points"] = [
+                p.to(device, non_blocking=True) for p in batch["lidar_points"]
+            ]
+        batch["gt_boxes"] = [b.to(device, non_blocking=True) for b in batch["gt_boxes"]]
+        batch["gt_labels"] = [b.to(device, non_blocking=True) for b in batch["gt_labels"]]
+        return batch
+
     def _forward(self, batch):
         imgs = batch["imgs"]  # (B, T, N, C, H, W)
         lidar_points = batch.get("lidar_points", None)  # List[Tensor(N, 4)]
