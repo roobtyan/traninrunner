@@ -16,7 +16,7 @@ task:
   entry: train.fusion_det3d.fusion_det3d:FusionDet3DTask
   kwargs:
     data:
-      data_root: train/fusion_det3d/data/nuscenes/v1.0-mini
+      data_root: train/fusion_det3d/data/nuscenes
       version: v1.0-mini
       queue_length: 1
       img_size: [256, 704]
