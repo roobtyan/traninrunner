@@ -99,28 +99,29 @@ class FusionDet3DTask(nn.Module):
             fpn_out_channels=self._model_cfg.get("fpn_out_channels", 256),
         )
 
-        self._lidar_encoder = (
-            LidarEncoder(
-                out_channels=self._embed_dims,
-                pc_range=self._point_cloud_range,
-                voxel_size=self._voxel_size,
-                bev_shape=self._bev_shape,
+        if self._use_lidar:
+            self._lidar_encoder = (
+                LidarEncoder(
+                    out_channels=self._embed_dims,
+                    pc_range=self._point_cloud_range,
+                    voxel_size=self._voxel_size,
+                    bev_shape=self._bev_shape,
+                )
+                if self._use_lidar
+                else None
             )
-            if self._use_lidar
-            else None
-        )
 
-        self.fusion_layer = nn.Sequential(
-            nn.Conv2d(
-                self._embed_dims * 2,
-                self._embed_dims,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            nn.BatchNorm2d(self._embed_dims),
-            nn.ReLU(inplace=True),
-        )
+            self.fusion_layer = nn.Sequential(
+                nn.Conv2d(
+                    self._embed_dims * 2,
+                    self._embed_dims,
+                    kernel_size=3,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(self._embed_dims),
+                nn.ReLU(inplace=True),
+            )
 
         self._head = BEVDet3DHead(
             in_channels=self._embed_dims,
