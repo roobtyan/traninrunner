@@ -2,13 +2,11 @@
 runs/
 __pycache__/
 *.pyc
-pyproject.toml
 .env
 .DS_Store
 .idea/
 .vscode/
 *.log
 trainrunner.egg-info/
-cifar-100-python/
 Agents.md
 data/

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trainrunner"
+version = "0.1.0"
+description = "A lightweight script-style PyTorch training runner (DDP/resume/metrics.jsonl)."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy>=1.23",
+  "pyyaml>=6.0",
+  "torch>=2.0",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+classify = [
+  "pillow>=10.0",
+  "torchvision>=0.15",
+]
+
+[project.scripts]
+trainrunner = "trainrunner.run:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
