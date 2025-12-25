@@ -300,6 +300,39 @@ class FusionDet3DTask(nn.Module):
             next(self.parameters()).device
         )  # (B, T, 4, 4)
 
+    def _boxes_ego_to_global(self, boxes: torch.Tensor, ego2global: torch.Tensor):
+        if boxes.numel() == 0:
+            return boxes
+        if not isinstance(ego2global, torch.Tensor):
+            ego2global = torch.tensor(ego2global, dtype=boxes.dtype)
+        ego2global = ego2global.to(device=boxes.device, dtype=boxes.dtype)
+
+        centers = boxes[:, 0:3]
+        ones = torch.ones((boxes.shape[0], 1), device=boxes.device, dtype=boxes.dtype)
+        centers_h = torch.cat([centers, ones], dim=1)
+        centers_global = (ego2global @ centers_h.t()).t()[:, :3]
+
+        rot = ego2global[:3, :3]
+        yaws = boxes[:, 6]
+        dir_xy = torch.stack(
+            [torch.cos(yaws), torch.sin(yaws), torch.zeros_like(yaws)], dim=1
+        )
+        dir_global = (rot @ dir_xy.t()).t()
+        yaws_global = torch.atan2(dir_global[:, 1], dir_global[:, 0])
+
+        vel = boxes[:, 7:9]
+        vel3 = torch.cat(
+            [vel, torch.zeros((boxes.shape[0], 1), device=boxes.device, dtype=boxes.dtype)],
+            dim=1,
+        )
+        vel_global = (rot @ vel3.t()).t()[:, :2]
+
+        out = boxes.clone()
+        out[:, 0:3] = centers_global
+        out[:, 6] = yaws_global
+        out[:, 7:9] = vel_global
+        return out
+
     def training_step(self, batch, ctx: Dict[str, Any]):
         return self._step(batch, ctx)
 
@@ -326,10 +359,13 @@ class FusionDet3DTask(nn.Module):
         for i in range(b):
             frame_meta = metas[i][-1]
             sample_token = frame_meta.get("sample_token", "")
+            boxes_ego = dets[i]["boxes_3d"].detach().cpu()
+            ego2global = frame_meta["ego2globals"][0]
+            boxes_global = self._boxes_ego_to_global(boxes_ego, ego2global)
             self._val_results.append(
                 {
                     "sample_token": sample_token,
-                    "boxes_3d": dets[i]["boxes_3d"].detach().cpu(),
+                    "boxes_3d": boxes_global,
                     "scores": dets[i]["scores"].detach().cpu(),
                     "labels": dets[i]["labels"].detach().cpu(),
                 }
@@ -343,7 +379,7 @@ class FusionDet3DTask(nn.Module):
                 visualize_sample(
                     frame_meta,
                     {
-                        "boxes_3d": dets[i]["boxes_3d"].detach().cpu(),
+                        "boxes_3d": boxes_ego,
                         "scores": dets[i]["scores"].detach().cpu(),
                         "labels": dets[i]["labels"].detach().cpu(),
                         "hm": preds["hm"][i].detach().cpu(),

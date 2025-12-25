@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Dict, List
 
 import torch
+import torch.nn.functional as F
 
 
 def _topk(scores: torch.Tensor, k: int):
@@ -33,6 +34,13 @@ def _gather_feat(feat: torch.Tensor, ind: torch.Tensor) -> torch.Tensor:
     return feat.gather(1, ind)
 
 
+def _local_max(hm: torch.Tensor, kernel: int = 3) -> torch.Tensor:
+    pad = (kernel - 1) // 2
+    hmax = F.max_pool2d(hm, kernel, stride=1, padding=pad)
+    keep = (hmax == hm).float()
+    return hm * keep
+
+
 def decode_center_head(
     hm: torch.Tensor,
     reg: torch.Tensor,
@@ -41,6 +49,7 @@ def decode_center_head(
     max_per_img: int = 100,
 ) -> List[Dict[str, torch.Tensor]]:
     hm = hm.sigmoid()
+    hm = _local_max(hm)
     b, c, h, w = hm.shape
     k = min(int(max_per_img), h * w)
     scores, inds, clses, ys, xs = _topk(hm, k)
