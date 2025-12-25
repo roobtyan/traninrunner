@@ -303,7 +303,7 @@ def build_nuscenes_bev_dataloader(
         num_workers=num_workers,
         sampler=sampler,
         pin_memory=True,
-        drop_last=is_ddp,
+        drop_last=(split == 'train'),
         collate_fn=custom_collate_fn,
         persistent_workers=(num_workers > 0),
         prefetch_factor=2 if num_workers > 0 else None 
