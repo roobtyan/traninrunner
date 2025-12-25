@@ -102,15 +102,16 @@ def _draw_boxes(
 
 
 def _build_heatmap_panel(
-    hm: torch.Tensor, topk: int, out_size: tuple[int, int]
+    hm: torch.Tensor,
+    topk: int,
+    out_size: tuple[int, int],
+    class_names: List[str],
 ) -> Image.Image:
     hm = hm.sigmoid()
     c, h, w = hm.shape
     k = min(int(topk), c * h * w)
-    img = Image.new("RGB", (w, h), (0, 0, 0))
-    if k <= 0:
-        return img.resize(out_size)
-    scores, inds = torch.topk(hm.reshape(-1), k)
+    panel_w, panel_h = out_size
+    panel = Image.new("RGB", (panel_w, panel_h), (0, 0, 0))
     colors = [
         (255, 64, 64),
         (64, 255, 64),
@@ -119,16 +120,49 @@ def _build_heatmap_panel(
         (192, 64, 255),
         (64, 255, 192),
     ]
-    draw = ImageDraw.Draw(img)
-    for idx in inds.tolist():
-        cls = idx // (h * w)
-        rem = idx % (h * w)
-        y = rem // w
-        x = rem % w
-        color = colors[int(cls) % len(colors)]
-        r = 2
-        draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
-    return img.resize(out_size)
+    legend_width = min(panel_w // 2, max(160, panel_w // 4))
+    heatmap_w = panel_w - legend_width
+    if heatmap_w <= 0:
+        heatmap_w = panel_w
+        legend_width = 0
+
+    img = Image.new("RGB", (w, h), (0, 0, 0))
+    if k > 0:
+        scores, inds = torch.topk(hm.reshape(-1), k)
+        draw = ImageDraw.Draw(img)
+        for idx in inds.tolist():
+            cls = idx // (h * w)
+            rem = idx % (h * w)
+            y = rem // w
+            x = rem % w
+            color = colors[int(cls) % len(colors)]
+            r = 2
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
+
+    scale = min(heatmap_w / w, panel_h / h)
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    img = img.resize((new_w, new_h))
+    panel.paste(img, (0, (panel_h - new_h) // 2))
+
+    if legend_width > 0 and class_names:
+        draw = ImageDraw.Draw(panel)
+        padding = 10
+        swatch = 12
+        row_h = 18
+        legend_total_h = len(class_names) * row_h
+        legend_x = panel_w - legend_width + padding
+        legend_y = panel_h - legend_total_h - padding
+        if legend_y < padding:
+            legend_y = padding
+        for i, name in enumerate(class_names):
+            color = colors[i % len(colors)]
+            y = legend_y + i * row_h
+            draw.rectangle((legend_x, y, legend_x + swatch, y + swatch), fill=color)
+            draw.text(
+                (legend_x + swatch + 6, y - 2), name, fill=(255, 255, 255)
+            )
+    return panel
 
 
 def visualize_sample(
@@ -177,7 +211,9 @@ def visualize_sample(
         c = i % 3
         grid.paste(img, (c * img_w, r * img_h))
 
-    heatmap = _build_heatmap_panel(pred["hm"], topk=topk, out_size=(img_w * 3, img_h))
+    heatmap = _build_heatmap_panel(
+        pred["hm"], topk=topk, out_size=(img_w * 3, img_h), class_names=class_names
+    )
     canvas = Image.new("RGB", (img_w * 3, img_h * 3), (0, 0, 0))
     canvas.paste(grid, (0, 0))
     canvas.paste(heatmap, (0, img_h * 2))
